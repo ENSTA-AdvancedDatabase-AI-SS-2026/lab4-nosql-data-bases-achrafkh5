@@ -1,33 +1,34 @@
-/**
- * TP2 - Exercice 3 : Pipelines d'Agrégation
- * Use Case : Statistiques médicales HealthCare DZ
- */
-
 use("medical_db");
 
-// ─── 3.1 : Distribution des diagnostics par wilaya ────────────────────────────
-print("=== 3.1 : Top diagnostics par wilaya ===");
-
 const diagParWilaya = db.patients.aggregate([
-  // TODO: Étape 1 - $unwind sur consultations
-  // TODO: Étape 2 - $group par wilaya + diagnostic
-  // TODO: Étape 3 - $sort par count
-  // TODO: Étape 4 - $limit 20
+  { $unwind: "$consultations" },
+  { $group: { 
+      _id: { wilaya: "$adresse.wilaya", diagnostic: "$consultations.diagnostic" }, 
+      count: { $sum: 1 } 
+    } 
+  },
+  { $sort: { count: -1 } },
+  { $limit: 20 }
 ]).toArray();
-
-// printjson(diagParWilaya);
-
-// ─── 3.2 : Médicament le plus prescrit par spécialité ─────────────────────────
-print("\n=== 3.2 : Top médicaments par spécialité ===");
+printjson(diagParWilaya);
 
 const medsParSpecialite = db.patients.aggregate([
-  // TODO: $unwind consultations, puis $unwind medicaments
-  // $group par specialite + nom_medicament
-  // $sort + $group pour garder le top 1 par spécialité
+  { $unwind: "$consultations" },
+  { $unwind: "$consultations.medicaments" },
+  { $group: { 
+      _id: { specialite: "$consultations.medecin.specialite", medicament: "$consultations.medicaments.nom" }, 
+      count: { $sum: 1 } 
+    } 
+  },
+  { $sort: { count: -1 } },
+  { $group: { 
+      _id: "$_id.specialite", 
+      top_med: { $first: "$_id.medicament" }, 
+      count: { $first: "$count" } 
+    } 
+  }
 ]).toArray();
-
-// ─── 3.3 : Évolution mensuelle des consultations ──────────────────────────────
-print("\n=== 3.3 : Consultations par mois (12 derniers mois) ===");
+printjson(medsParSpecialite);
 
 const evolutionMensuelle = db.patients.aggregate([
   { $unwind: "$consultations" },
@@ -36,34 +37,65 @@ const evolutionMensuelle = db.patients.aggregate([
       $gte: new Date(new Date().setFullYear(new Date().getFullYear() - 1))
     }
   }},
-  // TODO: $group par année + mois
-  // TODO: $sort par date
-  // TODO: $project pour formater la date en "YYYY-MM"
+  { $group: { 
+      _id: { 
+        year: { $year: "$consultations.date" }, 
+        month: { $month: "$consultations.date" } 
+      }, 
+      count: { $sum: 1 } 
+    } 
+  },
+  { $sort: { "_id.year": 1, "_id.month": 1 } },
+  { $project: { 
+      date: { $concat: [{ $toString: "$_id.year" }, "-", { $toString: "$_id.month" }] }, 
+      count: 1, 
+      _id: 0 
+    } 
+  }
 ]).toArray();
-
-// ─── 3.4 : Patients à risque multiple ────────────────────────────────────────
-print("\n=== 3.4 : Profil patients à risque élevé ===");
+printjson(evolutionMensuelle);
 
 const patientsRisque = db.patients.aggregate([
   {
     $match: {
       antecedents: { $all: ["Diabète type 2", "HTA"] },
-      // TODO: Ajouter filtre âge > 60
+      dateNaissance: { $lt: new Date(new Date().setFullYear(new Date().getFullYear() - 60)) }
     }
   },
-  // TODO: $addFields pour calculer l'âge et le nombre de consultations
-  // TODO: $group pour les statistiques globales
+  { $addFields: {
+      age: { $subtract: [new Date().getFullYear(), { $year: "$dateNaissance" }] },
+      nb_consultations: { $size: "$consultations" }
+    }
+  },
+  { $group: {
+      _id: null,
+      avg_age: { $avg: "$age" },
+      total_patients: { $sum: 1 }
+    }
+  }
 ]).toArray();
-
-// ─── 3.5 : Rapport médecins ───────────────────────────────────────────────────
-print("\n=== 3.5 : Top 5 médecins & taux de ré-consultation ===");
+printjson(patientsRisque);
 
 const rapportMedecins = db.patients.aggregate([
   { $unwind: "$consultations" },
-  // TODO: $group par médecin, compter patients uniques et consultations totales
-  // TODO: $addFields pour calculer le taux de ré-consultation
-  // = (total_consultations - patients_uniques) / patients_uniques * 100
-  // TODO: $sort + $limit 5
+  { $group: {
+      _id: "$consultations.medecin.nom",
+      patients_uniques: { $addToSet: "$_id" },
+      total_consultations: { $sum: 1 }
+    }
+  },
+  { $addFields: {
+      nb_uniques: { $size: "$patients_uniques" },
+      taux_reconsultation: {
+        $multiply: [
+          { $divide: [{ $subtract: ["$total_consultations", { $size: { $ifNull: ["$patients_uniques", []] } }] }, { $size: { $ifNull: ["$patients_uniques", [1]] } }] },
+          100
+        ]
+      }
+    }
+  },
+  { $sort: { total_consultations: -1 } },
+  { $limit: 5 }
 ]).toArray();
-
 printjson(rapportMedecins);
+

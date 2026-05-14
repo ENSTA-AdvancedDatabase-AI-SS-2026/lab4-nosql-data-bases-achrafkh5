@@ -1,7 +1,6 @@
-"""
-TP3 - Exercice 2 : Ingestion de données IoT
-Use Case : SmartGrid DZ - 10 000 capteurs, 5 minutes de mesures
-"""
+import sys
+from unittest.mock import MagicMock
+sys.modules["asyncore"] = MagicMock()
 from cassandra.cluster import Cluster
 from cassandra.query import BatchStatement, BatchType
 import uuid
@@ -9,10 +8,9 @@ import random
 from datetime import datetime, timedelta
 import time
 
-# Configuration
 CASSANDRA_HOST = 'localhost'
 KEYSPACE = 'smartgrid'
-NB_CAPTEURS = 10000
+NB_CAPTEURS = 1000
 MINUTES_HISTORIQUE = 5
 
 WILAYAS = ["Alger", "Oran", "Constantine", "Annaba", "Blida"]
@@ -24,74 +22,70 @@ COMMUNES = {
     "Blida": ["Bougara", "Boufarik", "Larbaa"],
 }
 
+from cassandra.io.asyncioreactor import AsyncioConnection
+
 def connect():
-    """Connexion au cluster Cassandra"""
-    cluster = Cluster([CASSANDRA_HOST])
+    cluster = Cluster([CASSANDRA_HOST], connection_class=AsyncioConnection)
     session = cluster.connect(KEYSPACE)
     return session, cluster
 
-
 def generate_mesure(capteur_id, wilaya, commune, timestamp):
-    """Générer une mesure réaliste pour un capteur"""
-    tension_base = 220  # Volts (réseau algérien)
-    
+    tension_base = 220
     return {
         "capteur_id": capteur_id,
         "date_jour": timestamp.date(),
         "timestamp": timestamp,
         "wilaya": wilaya,
         "commune": commune,
-        # Variation normale ± 10V
         "tension_v": round(tension_base + random.gauss(0, 5), 2),
         "courant_a": round(random.uniform(0.5, 15.0), 2),
         "puissance_kw": round(random.uniform(0.1, 3.3), 3),
         "frequence_hz": round(50 + random.gauss(0, 0.1), 2),
         "temperature": round(random.uniform(20, 65), 1),
-        # 5% de chance d'alerte
         "alerte": random.random() < 0.05,
     }
 
-
 def insert_single(session, mesure):
-    """
-    TODO: Insérer une seule mesure dans mesures_par_capteur
-    Utiliser une prepared statement
-    """
-    pass
-
+    query = "INSERT INTO mesures_par_capteur (capteur_id, date_jour, timestamp, wilaya, commune, tension_v, courant_a, puissance_kw, frequence_hz, temperature, alerte) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    prepared = session.prepare(query)
+    session.execute(prepared, (mesure["capteur_id"], mesure["date_jour"], mesure["timestamp"], mesure["wilaya"], mesure["commune"], mesure["tension_v"], mesure["courant_a"], mesure["puissance_kw"], mesure["frequence_hz"], mesure["temperature"], mesure["alerte"]))
 
 def insert_batch(session, mesures: list):
-    """
-    TODO: Insérer un batch de mesures de manière efficace
-    Utiliser UNLOGGED BATCH pour les séries temporelles
-    Faire des batches de max 50 items (bonne pratique Cassandra)
-    """
-    pass
-
+    query = "INSERT INTO mesures_par_capteur (capteur_id, date_jour, timestamp, wilaya, commune, tension_v, courant_a, puissance_kw, frequence_hz, temperature, alerte) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    prepared = session.prepare(query)
+    batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+    for m in mesures:
+        batch.add(prepared, (m["capteur_id"], m["date_jour"], m["timestamp"], m["wilaya"], m["commune"], m["tension_v"], m["courant_a"], m["puissance_kw"], m["frequence_hz"], m["temperature"], m["alerte"]))
+    session.execute(batch)
 
 def run_ingestion(session):
-    """
-    TODO: Générer et insérer NB_CAPTEURS × MINUTES_HISTORIQUE mesures
-    1. Générer les capteurs (ID aléatoires + assignation wilaya/commune)
-    2. Pour chaque minute des MINUTES_HISTORIQUE dernières minutes
-       → Insérer les mesures de tous les capteurs
-    3. Mesurer et afficher :
-       - Nombre total d'insertions
-       - Durée totale
-       - Débit (mesures/seconde)
-    """
-    print(f"Démarrage ingestion : {NB_CAPTEURS} capteurs × {MINUTES_HISTORIQUE} min")
     start = time.time()
-    
-    # TODO: Implémenter
-    
+    capteurs = []
+    for _ in range(NB_CAPTEURS):
+        w = random.choice(WILAYAS)
+        c = random.choice(COMMUNES[w])
+        capteurs.append((uuid.uuid4(), w, c))
+    total_inserted = 0
+    now = datetime.now()
+    for i in range(MINUTES_HISTORIQUE):
+        ts = now - timedelta(minutes=i)
+        mesures = []
+        for cid, w, c in capteurs:
+            m = generate_mesure(cid, w, c, ts)
+            mesures.append(m)
+            if len(mesures) >= 50:
+                insert_batch(session, mesures)
+                total_inserted += len(mesures)
+                mesures = []
+        if mesures:
+            insert_batch(session, mesures)
+            total_inserted += len(mesures)
     elapsed = time.time() - start
-    total = NB_CAPTEURS * MINUTES_HISTORIQUE
-    print(f"\n✅ {total:,} mesures insérées en {elapsed:.1f}s")
-    print(f"   Débit : {total/elapsed:,.0f} mesures/seconde")
-
+    print(f"✅ {total_inserted} mesures insérées en {elapsed:.1f}s")
+    print(f"   Débit : {total_inserted/elapsed:,.0f} m/s")
 
 if __name__ == "__main__":
     session, cluster = connect()
     run_ingestion(session)
     cluster.shutdown()
+

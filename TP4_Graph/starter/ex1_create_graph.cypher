@@ -1,13 +1,9 @@
-// TP4 - Exercice 1 : Création du graphe UniConnect DZ
-// Effacer la base pour partir propre
 MATCH (n) DETACH DELETE n;
 
-// ─── 1.1 : Contraintes d'unicité ─────────────────────────────────────────────
 CREATE CONSTRAINT etudiant_id IF NOT EXISTS FOR (e:Etudiant) REQUIRE e.id IS UNIQUE;
 CREATE CONSTRAINT cours_code IF NOT EXISTS FOR (c:Cours) REQUIRE c.code IS UNIQUE;
 CREATE CONSTRAINT competence_nom IF NOT EXISTS FOR (c:Competence) REQUIRE c.nom IS UNIQUE;
 
-// ─── 1.2 : Créer les compétences ──────────────────────────────────────────────
 UNWIND [
   {nom: "Python", categorie: "Programmation"},
   {nom: "Java", categorie: "Programmation"},
@@ -22,7 +18,6 @@ UNWIND [
 ] AS comp
 MERGE (:Competence {nom: comp.nom, categorie: comp.categorie});
 
-// ─── 1.3 : Créer les cours ────────────────────────────────────────────────────
 UNWIND [
   {code: "INFO401", intitule: "Bases de Données Avancées", credits: 6, dept: "Informatique"},
   {code: "INFO402", intitule: "Intelligence Artificielle", credits: 6, dept: "Informatique"},
@@ -30,34 +25,30 @@ UNWIND [
   {code: "INFO404", intitule: "Systèmes Distribués", credits: 5, dept: "Informatique"},
   {code: "INFO405", intitule: "Cloud Computing", credits: 4, dept: "Informatique"}
 ] AS cours
-MERGE (:Cours {code: cours.code, intitule: cours.intitule, 
-               credits: cours.credits, departement: cours.dept});
+MERGE (:Cours {code: cours.code, intitule: cours.intitule, credits: cours.credits, departement: cours.dept});
 
-// ─── 1.4 : Créer les étudiants ────────────────────────────────────────────────
-// TODO: Créer 50 étudiants avec données algériennes réalistes
-// Utiliser UNWIND avec une liste de maps
-// Universités : USTHB, UMBB, USTO, UMC, UBMA
-// Filieres : Informatique, Mathématiques, Electronique, Telecoms, GL
+UNWIND range(1, 50) AS i
+WITH i, ["USTHB", "UMBB", "USTO", "UMC", "UBMA"][i % 5] AS uni, ["Informatique", "Mathématiques", "Electronique", "Telecoms", "GL"][i % 5] AS filiere
+MERGE (e:Etudiant {id: "E" + i})
+SET e.prenom = "Prenom" + i, e.nom = "Nom" + i, e.universite = uni, e.filiere = filiere, e.annee = 3, e.ville = "Alger";
 
-UNWIND [
-  // TODO: Ajouter 50 étudiants
-  {id: "E001", prenom: "Ahmed", nom: "Bensalem", universite: "USTHB", 
-   filiere: "Informatique", annee: 3, ville: "Alger"},
-  {id: "E002", prenom: "Fatima", nom: "Ouali", universite: "USTHB",
-   filiere: "Informatique", annee: 3, ville: "Alger"}
-  // TODO: Continuer...
-] AS data
-MERGE (e:Etudiant {id: data.id})
-SET e += data;
+MATCH (e1:Etudiant), (e2:Etudiant)
+WHERE e1.id <> e2.id AND abs(
+    (CASE WHEN substring(e1.id, 1) = "" THEN 0 ELSE toInteger(substring(e1.id, 1)) END) - 
+    (CASE WHEN substring(e2.id, 1) = "" THEN 0 ELSE toInteger(substring(e2.id, 1)) END)
+) < 3
+MERGE (e1)-[:CONNAIT {depuis: 2023}]->(e2);
 
-// ─── 1.5 : Créer les relations ────────────────────────────────────────────────
-// TODO: Relations CONNAIT entre étudiants
-// Assurer que le graphe est connexe (pas d'étudiants isolés)
+MATCH (e:Etudiant), (c:Cours)
+WITH e, c, rand() AS r
+WHERE r < 0.5
+MERGE (e)-[:SUIT {note: 10 + rand() * 10}]->(c);
 
-// TODO: Relations SUIT (étudiant → cours) avec notes
+MATCH (e:Etudiant), (comp:Competence)
+WITH e, comp, rand() AS r
+WHERE r < 0.3
+MERGE (e)-[:MAITRISE {niveau: "Intermédiaire"}]->(comp);
 
-// TODO: Relations MAITRISE (étudiant → compétence) avec niveaux
-
-// Vérification
 MATCH (n) RETURN labels(n)[0] AS type, count(n) AS total ORDER BY total DESC;
 MATCH ()-[r]->() RETURN type(r) AS relation, count(r) AS total ORDER BY total DESC;
+
